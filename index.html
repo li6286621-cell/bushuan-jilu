@@ -855,6 +855,54 @@
       color: #909399;
     }
 
+    #feedbackOverlay .upload-paste-hint {
+      width: 100%;
+      min-height: 88px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border: 1px dashed #c6e2ff;
+      border-radius: var(--radius-md);
+      background: #fff;
+      color: #909399;
+      font-size: 13px;
+      line-height: 1.5;
+      text-align: center;
+      padding: 16px;
+    }
+
+    #feedbackOverlay .upload-paste-hint strong {
+      color: #606266;
+      font-weight: 500;
+    }
+
+    #feedbackOverlay .upload-paste-more {
+      width: 120px;
+      height: 120px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      border: 1px dashed #c6e2ff;
+      border-radius: var(--radius-md);
+      background: #fcfdff;
+      color: #909399;
+      font-size: 12px;
+      line-height: 1.45;
+      text-align: center;
+      padding: 8px;
+      box-sizing: border-box;
+    }
+
+    #feedbackOverlay .upload-paste-more strong {
+      color: #409eff;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
     #feedbackOverlay .upload-box {
       border-color: #c6e2ff;
       background: #fff;
@@ -2632,10 +2680,9 @@
         <section class="feedback-section feedback-upload">
           <label class="upload-field-label">
             问题图片
-            <span class="upload-field-tip">大小不超过 5MB，支持 JPG、PNG、GIF、WebP、BMP</span>
+            <span class="upload-field-tip" id="feedbackImageTip">最多 5 张，可多次 Ctrl+V 粘贴，单张不超过 5MB</span>
           </label>
           <div class="upload-wrap" id="feedbackImageList"></div>
-          <input type="file" id="feedbackImageInput" accept="image/jpeg,image/png,image/gif,image/webp,image/bmp,.jpg,.jpeg,.png,.gif,.webp,.bmp" multiple hidden />
         </section>
       </div>
       <div class="modal-footer feedback-form-footer">
@@ -3959,7 +4006,6 @@
         document.getElementById("feedbackText").value = "";
         feedbackImages = [];
         renderFeedbackImages();
-        document.getElementById("feedbackImageInput").value = "";
         if (feedbackModulePicker) feedbackModulePicker.setPath(DEFAULT_MODULE_PATH);
         document.getElementById("feedbackOverlay").classList.add("show");
       }
@@ -5181,20 +5227,126 @@
         return "\"" + s + "\"";
       }
 
+      function isFeedbackOverlayOpen() {
+        var overlay = document.getElementById("feedbackOverlay");
+        return overlay && overlay.classList.contains("show");
+      }
+
+      function addFeedbackImageFile(file, defaultName) {
+        if (!file) return false;
+        if (feedbackImages.length >= IMAGE_MAX_COUNT) {
+          showToast("最多上传 " + IMAGE_MAX_COUNT + " 张图片");
+          return false;
+        }
+        var type = file.type || "";
+        if (IMAGE_ACCEPT_TYPES.indexOf(type) < 0) {
+          showToast("不支持该图片格式：" + (file.name || defaultName || "图片"));
+          return false;
+        }
+        if (file.size > IMAGE_MAX_SIZE) {
+          showToast("图片不能超过 5MB：" + (file.name || defaultName || "图片"));
+          return false;
+        }
+        var reader = new FileReader();
+        reader.onload = function (e) {
+          feedbackImages.push({
+            id: "IMG-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7),
+            name: file.name || defaultName || "粘贴图片.png",
+            type: type,
+            dataUrl: e.target.result
+          });
+          renderFeedbackImages();
+        };
+        reader.readAsDataURL(file);
+        return true;
+      }
+
+      function addFeedbackImageFiles(files) {
+        var added = 0;
+        Array.prototype.slice.call(files || []).forEach(function (file) {
+          if (feedbackImages.length + added >= IMAGE_MAX_COUNT) return;
+          if (addFeedbackImageFile(file)) added += 1;
+        });
+        return added;
+      }
+
+      function collectClipboardImageFiles(clipboardData) {
+        var files = [];
+        if (!clipboardData) return files;
+        var items = clipboardData.items;
+        if (items && items.length) {
+          for (var i = 0; i < items.length; i++) {
+            if (items[i].type && items[i].type.indexOf("image/") === 0) {
+              var file = items[i].getAsFile();
+              if (file) files.push(file);
+            }
+          }
+        }
+        if (!files.length && clipboardData.files && clipboardData.files.length) {
+          Array.prototype.forEach.call(clipboardData.files, function (file) {
+            if (file.type && file.type.indexOf("image/") === 0) files.push(file);
+          });
+        }
+        return files;
+      }
+
+      function feedbackImageRemaining() {
+        return Math.max(0, IMAGE_MAX_COUNT - feedbackImages.length);
+      }
+
+      function updateFeedbackImageTip() {
+        var tipEl = document.getElementById("feedbackImageTip");
+        if (!tipEl) return;
+        var count = feedbackImages.length;
+        var remaining = feedbackImageRemaining();
+        if (!count) {
+          tipEl.textContent = "最多 " + IMAGE_MAX_COUNT + " 张，可多次 Ctrl+V 粘贴，单张不超过 5MB";
+        } else if (remaining > 0) {
+          tipEl.textContent = "已添加 " + count + " 张，还可粘贴 " + remaining + " 张（Ctrl+V 继续）";
+        } else {
+          tipEl.textContent = "已添加 " + IMAGE_MAX_COUNT + " 张，已达上限";
+        }
+      }
+
+      function handleFeedbackImagePaste(e) {
+        if (!isFeedbackOverlayOpen()) return;
+        var imageFiles = collectClipboardImageFiles(e.clipboardData);
+        if (!imageFiles.length) return;
+        e.preventDefault();
+        if (!feedbackImageRemaining()) {
+          showToast("最多粘贴 " + IMAGE_MAX_COUNT + " 张图片");
+          return;
+        }
+        var added = addFeedbackImageFiles(imageFiles);
+        if (added) {
+          var remaining = feedbackImageRemaining();
+          showToast(remaining > 0
+            ? "已粘贴 " + added + " 张，还可粘贴 " + remaining + " 张"
+            : "已粘贴 " + added + " 张，已达上限");
+        }
+      }
+
       function renderFeedbackImages() {
         var listEl = document.getElementById("feedbackImageList");
         if (!listEl) return;
+        var remaining = feedbackImageRemaining();
         var html = feedbackImages.map(function (img) {
           return "<div class=\"upload-preview-item\" data-id=\"" + img.id + "\">" +
             "<img src=\"" + img.dataUrl + "\" alt=\"" + escapeHtml(img.name) + "\" />" +
             "<button type=\"button\" class=\"upload-preview-remove\" data-remove=\"" + img.id + "\" aria-label=\"移除\">×</button>" +
             "</div>";
         }).join("");
-        if (feedbackImages.length < IMAGE_MAX_COUNT) {
-          html += "<div class=\"upload-box\" id=\"feedbackImageAdd\" role=\"button\" tabindex=\"0\" aria-label=\"添加问题图片\">" +
-            "<div class=\"upload-placeholder\"><span class=\"upload-plus\">+</span></div></div>";
+        if (!feedbackImages.length) {
+          html = "<div class=\"upload-paste-hint\" id=\"feedbackImagePasteHint\">" +
+            "<strong>按 Ctrl+V 粘贴图片</strong>" +
+            "<span>最多 " + IMAGE_MAX_COUNT + " 张，截图或复制后可在弹窗内任意位置粘贴</span></div>";
+        } else if (remaining > 0) {
+          html += "<div class=\"upload-paste-more\" id=\"feedbackImagePasteMore\">" +
+            "<strong>Ctrl+V</strong>" +
+            "<span>还可粘贴<br>" + remaining + " 张</span></div>";
         }
         listEl.innerHTML = html;
+        updateFeedbackImageTip();
         listEl.querySelectorAll(".upload-preview-item img").forEach(function (imgEl, idx) {
           imgEl.style.cursor = "pointer";
           imgEl.addEventListener("click", function (e) {
@@ -5210,53 +5362,16 @@
             renderFeedbackImages();
           });
         });
-        var addBtn = document.getElementById("feedbackImageAdd");
-        if (addBtn) {
-          addBtn.addEventListener("click", function () {
-            document.getElementById("feedbackImageInput").click();
-          });
-        }
       }
 
-      function initFeedbackUpload() {
-        var input = document.getElementById("feedbackImageInput");
-        input.addEventListener("change", function () {
-          var files = Array.prototype.slice.call(input.files || []);
-          input.value = "";
-          if (!files.length) return;
-          if (feedbackImages.length >= IMAGE_MAX_COUNT) {
-            showToast("最多上传 " + IMAGE_MAX_COUNT + " 张图片");
-            return;
-          }
-          files.forEach(function (file) {
-            if (feedbackImages.length >= IMAGE_MAX_COUNT) return;
-            if (IMAGE_ACCEPT_TYPES.indexOf(file.type) < 0) {
-              showToast("不支持该图片格式：" + file.name);
-              return;
-            }
-            if (file.size > IMAGE_MAX_SIZE) {
-              showToast("图片不能超过 5MB：" + file.name);
-              return;
-            }
-            var reader = new FileReader();
-            reader.onload = function (e) {
-              feedbackImages.push({
-                id: "IMG-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7),
-                name: file.name,
-                type: file.type,
-                dataUrl: e.target.result
-              });
-              renderFeedbackImages();
-            };
-            reader.readAsDataURL(file);
-          });
-        });
+      function initFeedbackImagePaste() {
+        document.addEventListener("paste", handleFeedbackImagePaste);
         renderFeedbackImages();
       }
 
       initModulePickers();
       initAggregatePagination();
-      initFeedbackUpload();
+      initFeedbackImagePaste();
     })();
   </script>
 </body>
