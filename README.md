@@ -10,9 +10,9 @@
 
 ## 分享链接（长期）
 
-https://ae-bushuang-jilu.surge.sh
+https://li6286621-cell.github.io/bushuan-jilu/
 
-详见 `分享链接.md`。本地有更新时，双击 `发布到Surge.bat` 同步到线上。
+详见 `分享链接.md`。本地更新后同步 `index.html` 并 `git push` 即可。
 
 ## 原型范围（对应文档 MVP / P1）
 
