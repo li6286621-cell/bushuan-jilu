@@ -5317,11 +5317,12 @@
           showToast("最多粘贴 " + IMAGE_MAX_COUNT + " 张图片");
           return;
         }
+        var remainingBefore = feedbackImageRemaining();
         var added = addFeedbackImageFiles(imageFiles);
         if (added) {
-          var remaining = feedbackImageRemaining();
-          showToast(remaining > 0
-            ? "已粘贴 " + added + " 张，还可粘贴 " + remaining + " 张"
+          var remainingAfter = Math.max(0, remainingBefore - added);
+          showToast(remainingAfter > 0
+            ? "已粘贴 " + added + " 张，还可粘贴 " + remainingAfter + " 张"
             : "已粘贴 " + added + " 张，已达上限");
         }
       }
