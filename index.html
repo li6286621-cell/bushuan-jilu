@@ -1874,6 +1874,7 @@
     .status-select.status-done { color: #67c23a; }
     .status-select.status-demand { color: #e6a23c; }
     .status-select.status-skip { color: #909399; }
+    .status-select.status-closed { color: #909399; }
 
     .status-badge {
       display: inline-block;
@@ -1889,6 +1890,41 @@
     .status-badge.status-done { background: #f0f9eb; color: #67c23a; }
     .status-badge.status-demand { background: #fdf6ec; color: #e6a23c; }
     .status-badge.status-skip { background: #eef1f6; color: #73767a; }
+    .status-badge.status-closed { background: #e9e9eb; color: #909399; }
+
+    .detail-closed-tip {
+      display: none;
+      margin: 0 0 12px;
+      padding: 8px 12px;
+      border-radius: var(--radius-sm);
+      background: #f4f4f5;
+      color: #909399;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .detail-handle-section.detail-readonly {
+      position: relative;
+    }
+
+    .detail-handle-section.detail-readonly .detail-closed-tip {
+      display: block;
+    }
+
+    .detail-handle-section.detail-readonly .modal-field {
+      opacity: 0.65;
+    }
+
+    .detail-handle-section.detail-readonly .detail-handle-select,
+    .detail-handle-section.detail-readonly textarea {
+      background: #f5f7fa;
+      color: #909399;
+      cursor: not-allowed;
+    }
+
+    .detail-overlay-closed .modal-footer #detailSave {
+      display: none;
+    }
 
     .detail-section-title {
       font-size: 14px;
@@ -1920,6 +1956,7 @@
     .detail-handle-select.status-done { color: #67c23a; }
     .detail-handle-select.status-demand { color: #e6a23c; }
     .detail-handle-select.status-skip { color: #909399; }
+    .detail-handle-select.status-closed { color: #909399; }
 
     .detail-view #detailProcessOpinion {
       width: 100%;
@@ -2440,6 +2477,7 @@
                       <option value="已处理">已处理</option>
                       <option value="已转需求">已转需求</option>
                       <option value="无需处理">无需处理</option>
+                      <option value="已关闭">已关闭</option>
                     </select>
                   </div>
                   <div class="form-item">
@@ -2617,6 +2655,7 @@
       <div class="modal-body detail-view">
         <div class="detail-section detail-handle-section">
           <div class="detail-section-title">处理信息</div>
+          <p class="detail-closed-tip" id="detailClosedTip">该反馈已关闭，处理信息不可修改</p>
           <div class="modal-field">
             <label class="field-label">处理状态</label>
             <select id="detailStatus" class="detail-handle-select">
@@ -2625,6 +2664,7 @@
               <option value="已处理">已处理</option>
               <option value="已转需求">已转需求</option>
               <option value="无需处理">无需处理</option>
+              <option value="已关闭">已关闭</option>
             </select>
           </div>
           <div class="modal-field">
@@ -2796,14 +2836,18 @@
         other: { category: "其它类", priority: "P2" }
       };
 
-      var PROCESS_STATUSES = ["待处理", "处理中", "已处理", "已转需求", "无需处理"];
+      var PROCESS_STATUSES = ["待处理", "处理中", "已处理", "已转需求", "无需处理", "已关闭"];
+      var COMPLETED_STATUSES = ["已处理", "已转需求", "无需处理"];
+      var CLOSED_STATUS = "已关闭";
+      var AUTO_CLOSE_DAYS = 30;
 
       var STATUS_CLASS_MAP = {
         "待处理": "status-pending",
         "处理中": "status-processing",
         "已处理": "status-done",
         "已转需求": "status-demand",
-        "无需处理": "status-skip"
+        "无需处理": "status-skip",
+        "已关闭": "status-closed"
       };
 
       var MODULE_TREE = {
@@ -3732,7 +3776,66 @@
         stored.forEach(function (fb) {
           if (!fb || !fb.id || fb.id.indexOf("FB-SEED-") !== 0) merged.push(fb);
         });
+        if (applyAutoCloseFeedbacks(merged)) {
+          saveFeedbacks(merged);
+        }
         return merged;
+      }
+
+      function parseDateTime(str) {
+        if (!str) return NaN;
+        return new Date(String(str).replace(" ", "T")).getTime();
+      }
+
+      function isCompletedStatus(status) {
+        return COMPLETED_STATUSES.indexOf(status || "") >= 0;
+      }
+
+      function isClosedStatus(status) {
+        return (status || "") === CLOSED_STATUS;
+      }
+
+      function inferCompletedAt(fb) {
+        var logs = fb.logs || [];
+        for (var i = logs.length - 1; i >= 0; i--) {
+          var content = (logs[i].content || "").trim();
+          if (/→\s*(已处理|已转需求|无需处理)/.test(content)) {
+            return logs[i].time || "";
+          }
+        }
+        return fb.createdAt || "";
+      }
+
+      function touchCompletedAt(fb, oldStatus, newStatus, nowStr) {
+        if (isCompletedStatus(newStatus)) {
+          if (!isCompletedStatus(oldStatus) || !fb.completedAt) {
+            fb.completedAt = nowStr;
+          }
+        } else if (!isClosedStatus(newStatus) && isCompletedStatus(oldStatus)) {
+          fb.completedAt = "";
+        }
+      }
+
+      function applyAutoCloseFeedbacks(list) {
+        var nowMs = Date.now();
+        var nowStr = new Date().toISOString().replace("T", " ").slice(0, 19);
+        var changed = false;
+        list.forEach(function (fb) {
+          if (!isCompletedStatus(fb.status)) return;
+          if (!fb.completedAt) {
+            fb.completedAt = inferCompletedAt(fb);
+          }
+          var completedMs = parseDateTime(fb.completedAt);
+          if (isNaN(completedMs)) return;
+          var days = (nowMs - completedMs) / 86400000;
+          if (days < AUTO_CLOSE_DAYS) return;
+          var oldStatus = fb.status;
+          fb.status = CLOSED_STATUS;
+          if (!fb.logs) fb.logs = [];
+          appendLogEntry(fb.logs, "系统", "处理状态变更：" + oldStatus + " → 已关闭（完成满30天自动关闭）", nowStr);
+          changed = true;
+        });
+        return changed;
       }
 
       function saveFeedbacks(list) {
@@ -3951,17 +4054,12 @@
       }
 
       function aggregateReporters(items) {
-        var seen = {};
-        var names = [];
-        items.forEach(function (it) {
-          if (it.userId && !seen[it.userId]) {
-            seen[it.userId] = true;
-            names.push(it.userId);
-          }
+        if (!items.length) return "—";
+        var sorted = items.slice().sort(function (a, b) {
+          return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
         });
-        if (!names.length) return "—";
-        if (names.length <= 3) return names.join("、");
-        return names.slice(0, 2).join("、") + " 等" + names.length + "人";
+        var latest = sorted[sorted.length - 1];
+        return (latest && latest.userId) ? latest.userId : "—";
       }
 
       function aggregateDescription(items) {
@@ -4226,9 +4324,14 @@
         };
         if (opts.processHandler) fb.processHandler = opts.processHandler;
         if (opts.processOpinion) fb.processOpinion = opts.processOpinion;
+        if (opts.completedAt) fb.completedAt = opts.completedAt;
+        else if (isCompletedStatus(fb.status) || isClosedStatus(fb.status)) fb.completedAt = createdAt;
         appendLogEntry(fb.logs, fb.userId, "提交不爽反馈", createdAt);
         if (opts.status && opts.status !== "待处理") {
           appendLogEntry(fb.logs, opts.processHandler || "产品经理", "处理状态变更：待处理 → " + opts.status, createdAt);
+        }
+        if (isClosedStatus(fb.status)) {
+          appendLogEntry(fb.logs, "系统", "处理状态变更：" + (opts.previousStatus || "已处理") + " → 已关闭（完成满30天自动关闭）", createdAt);
         }
         if (opts.processOpinion) {
           appendLogEntry(fb.logs, opts.processHandler || "产品经理", "更新处理意见：" + opts.processOpinion, createdAt);
@@ -4336,6 +4439,20 @@
             daysAgo: 3,
             hour: 13,
             minute: 50
+          }),
+          buildSeedFeedback("FB-SEED-012", {
+            tag: "ux",
+            text: "导出按钮位置不明显，新人找不到",
+            module: listing,
+            userId: "运营-小冯",
+            daysAgo: 45,
+            hour: 10,
+            minute: 0,
+            status: "已关闭",
+            previousStatus: "已处理",
+            processHandler: "张伟",
+            processOpinion: "已在旧版优化导出入口，反馈归档",
+            completedAt: seedDateTime(45, 10, 0)
           })
         ];
       }
@@ -4363,6 +4480,7 @@
 
       function setAggregateStatus(agg, newStatus, silent) {
         if (PROCESS_STATUSES.indexOf(newStatus) < 0) return false;
+        if (isClosedStatus(newStatus)) return false;
         var all = loadFeedbacks();
         var now = new Date().toISOString().replace("T", " ").slice(0, 19);
         var changed = false;
@@ -4371,7 +4489,9 @@
           if (idx < 0) return;
           var oldStatus = all[idx].status || "待处理";
           if (oldStatus === newStatus) return;
+          if (isClosedStatus(oldStatus)) return;
           all[idx].status = newStatus;
+          touchCompletedAt(all[idx], oldStatus, newStatus, now);
           all[idx].processHandler = USER_ID;
           if (!all[idx].logs) all[idx].logs = [];
           appendLogEntry(all[idx].logs, "产品经理", "处理状态变更：" + oldStatus + " → " + newStatus, now);
@@ -4393,6 +4513,7 @@
         agg.items.forEach(function (item) {
           var idx = all.findIndex(function (f) { return f.id === item.id; });
           if (idx < 0) return;
+          if (isClosedStatus(all[idx].status)) return;
           var oldOpinion = (all[idx].processOpinion || "").trim();
           if (oldOpinion === trimmed) return;
           all[idx].processOpinion = trimmed;
@@ -4570,6 +4691,35 @@
         sel.className = "detail-handle-select " + (STATUS_CLASS_MAP[status] || "status-pending");
       }
 
+      function syncDetailStatusOptions(closed) {
+        var closedOpt = document.querySelector("#detailStatus option[value=\"已关闭\"]");
+        if (!closedOpt) return;
+        closedOpt.hidden = !closed;
+        closedOpt.disabled = !closed;
+      }
+
+      function setDetailEditable(editable) {
+        var overlay = document.getElementById("detailOverlay");
+        var section = document.querySelector(".detail-handle-section");
+        var statusEl = document.getElementById("detailStatus");
+        var opinionEl = document.getElementById("detailProcessOpinion");
+        var saveBtn = document.getElementById("detailSave");
+        syncDetailStatusOptions(!editable);
+        if (editable) {
+          overlay.classList.remove("detail-overlay-closed");
+          section.classList.remove("detail-readonly");
+          statusEl.disabled = false;
+          opinionEl.readOnly = false;
+          saveBtn.disabled = false;
+        } else {
+          overlay.classList.add("detail-overlay-closed");
+          section.classList.add("detail-readonly");
+          statusEl.disabled = true;
+          opinionEl.readOnly = true;
+          saveBtn.disabled = true;
+        }
+      }
+
       function openImageViewer(list, index) {
         if (!list || !list.length) return;
         imageViewerList = list;
@@ -4693,7 +4843,7 @@
         var processingCount = aggregates.filter(function (a) { return aggregateStatus(a.items) === "处理中"; }).length;
         var doneCount = aggregates.filter(function (a) {
           var s = aggregateStatus(a.items);
-          return s === "已处理" || s === "已转需求" || s === "无需处理";
+          return isCompletedStatus(s) || isClosedStatus(s);
         }).length;
 
         document.getElementById("kpiRow").innerHTML =
@@ -4701,7 +4851,7 @@
           kpi("P0 待关注", p0, "优先处理", "danger") +
           kpi("待处理", pendingCount, "尚未开始", "warning") +
           kpi("处理中", processingCount, "跟进中", "info") +
-          kpi("已处理", doneCount, "含已转需求、无需处理", "success");
+          kpi("已处理", doneCount, "含已处理、已转需求、无需处理、已关闭", "success");
 
         var tbody = document.getElementById("aggregateBody");
         var visibleIds = {};
@@ -4800,6 +4950,7 @@
         document.getElementById("detailStatus").value = status;
         updateDetailStatusSelectClass(status);
         document.getElementById("detailProcessOpinion").value = aggregateProcessOpinion(agg.items);
+        setDetailEditable(!isClosedStatus(status));
         document.getElementById("detailModule").value = item.module || agg.module || "";
         document.querySelectorAll("#detailQuickTags .quick-tag").forEach(function (btn) {
           btn.classList.toggle("selected", btn.getAttribute("data-tag") === item.tag);
@@ -4826,6 +4977,8 @@
 
       function closeDetailModal() {
         document.getElementById("detailOverlay").classList.remove("show");
+        document.getElementById("detailOverlay").classList.remove("detail-overlay-closed");
+        setDetailEditable(true);
         currentDetailAggId = null;
       }
 
@@ -4857,7 +5010,15 @@
       document.getElementById("detailSave").addEventListener("click", function () {
         var agg = getCurrentDetailAgg();
         if (!agg) return;
+        if (isClosedStatus(aggregateStatus(agg.items))) {
+          showToast("该反馈已关闭，不可修改");
+          return;
+        }
         var newStatus = document.getElementById("detailStatus").value;
+        if (isClosedStatus(newStatus)) {
+          showToast("已关闭由系统自动归档，不可手动设置");
+          return;
+        }
         var newOpinion = document.getElementById("detailProcessOpinion").value.trim();
         var oldStatus = aggregateStatus(agg.items);
         setAggregateStatus(agg, newStatus, true);
